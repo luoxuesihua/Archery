@@ -206,14 +206,9 @@ def sqlexportworkflow(request):
     )
 
 
-@permission_required("sql.sql_submit", raise_exception=True)
-def submit_sql(request):
-    """提交SQL的页面"""
-    user = request.user
-    # 获取组信息
+def _build_submit_sql_context(user):
+    """构建SQL上线页面上下文"""
     group_list = user_groups(user)
-
-    # 获取系统配置
     archer_config = SysConfig()
 
     # 主动创建标签
@@ -221,12 +216,28 @@ def submit_sql(request):
         tag_code="can_write", defaults={"tag_name": "支持上线", "active": True}
     )
 
-    context = {
+    return {
         "group_list": group_list,
         "enable_backup_switch": archer_config.get("enable_backup_switch"),
         "engines": engine_map,
     }
+
+
+@permission_required("sql.sql_submit", raise_exception=True)
+def submit_sql(request):
+    """提交SQL的页面"""
+    context = _build_submit_sql_context(request.user)
+    context["batch_mode"] = False
     return render(request, "sqlsubmit.html", context)
+
+
+@permission_required("sql.sql_submit", raise_exception=True)
+def submit_sql_batch(request):
+    """批量提交SQL的页面"""
+    context = _build_submit_sql_context(request.user)
+    context["batch_mode"] = True
+    return render(request, "sqlsubmit.html", context)
+
 
 
 def detail(request, workflow_id):

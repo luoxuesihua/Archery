@@ -49,26 +49,38 @@
                                     {% endfor %}
                                 </select>
                             </div>
-                            <div class="form-group">
+                                                     <div class="form-group">
                                 <select id="instance_name" name="instance_name"
                                         class="selectpicker show-tick form-control bs-select-hidden"
-                                        data-name="实例" data-placeholder="请选择实例！"
-                                        title="请选择实例"
-                                        data-live-search="true" data-live-search-placeholder="搜索您所在组的实例" required>
+                                        data-name="实例" data-placeholder="{% if batch_mode %}请选择实例，可多选{% else %}请选择实例{% endif %}"
+                                        title="{% if batch_mode %}请选择实例（可多选）{% else %}请选择实例{% endif %}"
+                                        data-live-search="true" data-live-search-placeholder="搜索您所在组的实例"
+                                        {% if batch_mode %}multiple data-actions-box="true"{% endif %}
+                                        required>
                                 {% for name, engine in engines.items %}
                                     <optgroup id="optgroup-{{ name }}" label="{{ engine.name }}"></optgroup>
                                 {%  endfor %}
                                 </select>
                             </div>
                             <div class="form-group">
-                                <select id="db_name" name="db_name"
-                                        class="form-control selectpicker show-tick bs-select-hidden"
-                                        data-name="数据库" data-placeholder="请选择数据库！"
-                                        data-live-search="true" data-live-search-placeholder="搜索要提交的数据库"
-                                        title="请选择数据库"
-                                        required>
-                                    <option value="is-empty" disabled="" selected="selected">请选择数据库:</option>
-                                </select>
+                                {% if batch_mode %}
+                                    <input id="db_name" name="db_name"
+                                           type="text"
+                                           class="form-control"
+                                           data-name="数据库" data-placeholder="请输入数据库名称！"
+                                           placeholder="请输入需要变更的数据库（多个实例需存在同名库）"
+                                           autocomplete="off"
+                                           required>
+                                {% else %}
+                                    <select id="db_name" name="db_name"
+                                            class="form-control selectpicker show-tick bs-select-hidden"
+                                            data-name="数据库" data-placeholder="请选择数据库！"
+                                            data-live-search="true" data-live-search-placeholder="搜索要提交的数据库"
+                                            title="请选择数据库"
+                                            required>
+                                        <option value="is-empty" disabled selected>请选择数据库：</option>
+                                    </select>
+                                {% endif %}
                             </div>
                             {% if enable_backup_switch %}
                                 <div id="div-backup" class="form-group">
@@ -252,13 +264,22 @@
     <script>
         // 实例变更获取数据库补全提示
         $("#instance_name").change(function () {
-            var optgroup = $('#instance_name :selected').parent().attr('label');
-            $("#div-backup").show();
-            if (optgroup != "MySQL" && optgroup != "Oracle") {
-                $("#div-backup").hide();
-                $("#is_backup").val("False");
+            var selectedInstances = getSelectedInstances();
+            var supportsBackup = selectedInstances.length > 0 && selectedInstances.every(function (inst) {
+                return inst.dbType === "MySQL" || inst.dbType === "Oracle";
+            });
+            if ($("#div-backup").length) {
+                if (supportsBackup) {
+                    $("#div-backup").show();
+                } else {
+                    $("#div-backup").hide();
+                    $("#is_backup").val("False");
+                }
             }
-            //将数据通过ajax提交给获取db_name
+            if (isBatchMode) {
+                $("#db_name").val("");
+                return;
+            }
             $.ajax({
                 type: "get",
                 url: "/instance/instance_resource/",
@@ -270,7 +291,6 @@
                 complete: function () {
                     var pathname = window.location.pathname;
                     if (pathname === "/editsql/") {
-                        //填充库名
                         $("#db_name").selectpicker('val', sessionStorage.getItem('editDbname'));
                         if ($("#db_name").val()) {
                             $("#db_name").selectpicker().trigger("change");
@@ -281,14 +301,16 @@
                     if (data.status === 0) {
                         var result = data.data;
                         $("#db_name").empty();
+                        $("#db_name").append('<option value="is-empty" disabled selected>请选择数据库：</option>');
                         for (var i = 0; i < result.length; i++) {
                             var name = "<option value=\"" + result[i] + "\">" + result[i] + "</option>";
                             $("#db_name").append(name);
                         }
-                        $('#db_name').selectpicker('render');
-                        $('#db_name').selectpicker('refresh');
-                        //自动补全提示
-                        setDbsCompleteData(result)
+                        $("#db_name").selectpicker('render');
+                        $("#db_name").selectpicker('refresh');
+                        if (typeof setDbsCompleteData === "function") {
+                            setDbsCompleteData(result);
+                        }
                     } else {
                         alert(data.msg);
                     }
@@ -298,7 +320,7 @@
                 }
             });
         });
-        //数据库变更获取表名称补全提示
+        {% if not batch_mode %}
         $("#db_name").change(function () {
             //将数据通过ajax提交给获取db_name
             $.ajax({
@@ -325,32 +347,38 @@
                 }
             });
         });
+        {% endif %}
     </script>
     <!--validate -->
     <script>
         function validateForm(element) {
             var result = true;
-            element.find('[required]').each(
-                function () {
-                    var fieldElement = $(this);
-                    var fieldId = $(this).attr('id');
-                    //如果为null则设置为''
-                    var value = fieldElement.val() || '';
-                    if (value) {
-                        value = value.trim();
-                    }
-                    if (!value || value === fieldElement.attr('data-placeholder')) {
-                        alert(fieldElement.attr('data-placeholder'));
-                        result = false;
-                        return result;
-                    }
-                    if(fieldId == "workflow_name" && value.length>=50){
-                        alert("上线单名称/工单名称不能超过50个字符！");
-                        result = false;
-                        return result;
-                    }
+            element.find('[required]').each(function () {
+                var fieldElement = $(this);
+                var fieldId = $(this).attr('id');
+                var rawValue = fieldElement.val();
+                var value = rawValue;
+
+                if (Array.isArray(rawValue)) {
+                    value = rawValue.filter(function (item) {
+                        return item && item.trim();
+                    });
+                } else {
+                    value = (rawValue || '').toString().trim();
                 }
-            );
+
+                var isEmptyArray = Array.isArray(rawValue) && value.length === 0;
+                if ((!value && !Array.isArray(rawValue)) || isEmptyArray || value === fieldElement.attr('data-placeholder')) {
+                    alert(fieldElement.attr('data-placeholder'));
+                    result = false;
+                    return false;
+                }
+                if (fieldId === "workflow_name" && !Array.isArray(value) && value.length >= 50) {
+                    alert("���ߵ�����/�������Ʋ��ܳ���50���ַ���");
+                    result = false;
+                    return false;
+                }
+            });
             return result;
         }
 
@@ -371,6 +399,121 @@
     </script>
     <!--check-->
     <script>
+        const isBatchMode = {% if batch_mode %}true{% else %}false{% endif %};
+
+        function getSelectedInstances() {
+            return $("#instance_name option:selected").map(function () {
+                return {
+                    id: $(this).attr("instance-id"),
+                    name: $(this).text(),
+                    dbType: $(this).closest("optgroup").attr("label")
+                };
+            }).get();
+        }
+
+        function renderResultTable(rows) {
+            var tableColumns = [];
+            if (isBatchMode) {
+                tableColumns.push({
+                    title: '实例',
+                    field: 'instance',
+                    sortable: true
+                });
+            }
+            tableColumns = tableColumns.concat([{
+                title: 'ID',
+                field: 'id',
+                sortable: true
+            }, {
+                title: 'SQL语句',
+                field: 'sql',
+                formatter: function (value) {
+                    if (!value) {
+                        return value;
+                    }
+                    var sql = value.replace(/\n/g, '<br>').replace(/\s/g, '&nbsp;');
+                    if (value.length > 50) {
+                        return sql.substr(0, 50) + '...';
+                    }
+                    return sql;
+                }
+            }, {
+                title: '扫描/影响行数',
+                field: 'affected_rows',
+                sortable: true
+            }, {
+                title: '审核状态',
+                field: 'errlevel',
+                sortable: true,
+                formatter: function (value) {
+                    if (String(value) === '0') {
+                        return 'pass';
+                    } else if (String(value) === '1') {
+                        return 'warning';
+                    } else if (String(value) === '2') {
+                        return 'error';
+                    }
+                }
+            }, {
+                title: '审核信息',
+                field: 'errormessage',
+                formatter: function (value) {
+                    if (value === null) {
+                        return value;
+                    }
+                    return value.replace(/\n/g, '<br>');
+                }
+            }]);
+            $("#inception-result").bootstrapTable('destroy').bootstrapTable({
+                data: rows,
+                columns: tableColumns,
+                rowStyle: function (row) {
+                    var style = "";
+                    if (row.errlevel === 1) {
+                        style = 'warning';
+                    } else if (row.errlevel === 2) {
+                        style = 'danger';
+                    }
+                    return {classes: style};
+                },
+                escape: true,
+                striped: true,
+                cache: false,
+                sortable: true,
+                pagination: true,
+                sidePagination: "client",
+                pageNumber: 1,
+                pageSize: 500,
+                pageList: [500, 1000, 5000],
+                search: true,
+                strictSearch: false,
+                showColumns: true,
+                showRefresh: false,
+                showExport: true,
+                exportDataType: "all",
+                minimumCountColumns: 1,
+                uniqueId: isBatchMode ? "unique_id" : "id",
+                showToggle: true,
+                cardView: false,
+                detailView: true,
+                detailFormatter: function (index, row) {
+                    var html = [];
+                    if (row.sql) {
+                        let sql = row.sql;
+                        sql = sql.replace(/&/g, "&amp;");
+                        sql = sql.replace(/</g, "&lt;");
+                        sql = sql.replace(/>/g, "&gt;");
+                        sql = sql.replace(/"/g, "&quot;");
+                        sql = sql.replace(/\r\n/g, "<br>");
+                        sql = sql.replace(/\n/g, "<br>");
+                        sql = sql.replace(/\s/g, "&nbsp;");
+                        html.push('<span>' + sql + '</span>');
+                    }
+                    return html.join('');
+                }
+            });
+        }
+
         editor.on('change', function () {
             $('#btn-submitsql').addClass('disabled').prop("disabled", this);
         });
@@ -441,191 +584,192 @@
         });
 
         function autoreview() {
-            //将数据通过ajax提交给后端进行检查
-            $.ajax({
-                type: "post",
-                url: "/api/v1/workflow/sqlcheck/",
-                dataType: "json",
-                contentType: 'application/json;',
-                data: JSON.stringify({
-                    full_sql: editor.getValue(),
-                    instance_id: $("#instance_name option:selected").attr("instance-id"),
-                    db_name: $("#db_name").val()
-                }),
-                beforeSend: function (xhr) {
-                    $('#btn-autoreview').button('loading')
-                },
-                complete: function () {
-                    $('#btn-autoreview').button('reset')
-                },
-                success: function (data) {
-                    var result = data;
-                    //初始化表结构显示
-                    // 异步获取要动态生成的列
-                    var columns = [];
-                    $.each(result['column_list'], function (i, column) {
-                        columns.push({"field": i, "title": column, "sortable": true});
-                    });
-                    $("#inception-result").bootstrapTable('destroy').bootstrapTable({
-                            data: result['rows'],
-                            columns: [{
-                                title: 'ID',
-                                field: 'id',
-                                sortable: true
-                            }, {
-                                title: 'SQL语句',
-                                field: 'sql',
-                                formatter: function (value, row, index) {
-                                    var sql = value.replace(/\n/g, '<br>').replace(/\s/g, '&nbsp;');
-                                    if (value.length > 50) {
-                                        return sql.substr(0, 50) + '...';
-                                    } else {
-                                        return sql
-                                    }
-                                }
-                            }, {
-                                title: '扫描/影响行数',
-                                field: 'affected_rows',
-                                sortable: true
-                            }, {
-                                title: '审核状态',
-                                field: 'errlevel',
-                                sortable: true,
-                                formatter: function (value, row, index) {
-                                    if (String(value) === '0') {
-                                        return 'pass'
-                                    } else if (String(value) === '1') {
-                                        return 'warning'
-                                    } else if (String(value) === '2') {
-                                        return 'error'
-                                    }
-                                }
-                            }, {
-                                title: '审核信息',
-                                field: 'errormessage',
-                                formatter: function (value, row, index) {
-                                    if (value === null) {
-                                        return value
-                                    }
-                                    return value.replace(/\n/g, '<br>');
-                                }
-                            }],
-                            rowStyle: function (row, index) {
-                                var style = "";
-                                if (row.errlevel === 1) {
-                                    style = 'warning';
-                                } else if (row.errlevel === 2) {
-                                    style = 'danger';
-                                }
-                                return {classes: style}
-                            },
-                            escape: true,                       // 转义HTML字符串，替换 &, <, >, ", \`, 和 ' 字符。
-                            striped: true,                      //是否显示行间隔色
-                            cache: false,                       //是否使用缓存，默认为true，所以一般情况下需要设置一下这个属性（*）
-                            sortable: true,                     //是否启用排序
-                            //sortOrder: "desc",                   //排序方式
-                            //sortName: 'errormessage',           //排序字段
-                            pagination: true,                   //是否显示分页（*）
-                            sidePagination: "client",           //分页方式：client客户端分页，server服务端分页（*）
-                            pageNumber: 1,                      //初始化加载第一页，默认第一页,并记录
-                            pageSize: 500,                     //每页的记录行数（*）
-                            pageList: [500, 1000, 5000],       //可供选择的每页的行数（*）
-                            search: true,                      //是否显示表格搜索
-                            strictSearch: false,                //是否全匹配搜索
-                            showColumns: true,                  //是否显示所有的列（选择显示的列）
-                            showRefresh: false,                  //是否显示刷新按钮
-                            showExport: true,
-                            exportDataType: "all",
-                            minimumCountColumns: 1,             //最少允许的列数
-                            uniqueId: "id",                     //每一行的唯一标识，一般为主键列
-                            showToggle: true,                   //是否显示详细视图和列表视图的切换按钮
-                            cardView: false,                    //是否显示详细视图
-                            detailView: true,                  //是否显示父子表
-                            //格式化详情
-                            detailFormatter: function (index, row) {
-                                var html = [];
-                                $.each(row, function (key, value) {
-                                    if (key === 'sql') {
-                                        //let sql = window.sqlFormatter.format(key);
-                                        let sql = value;
-                                        //替换标签
-                                        sql = sql.replace(/&/g, "&amp;");
-                                        sql = sql.replace(/</g, "&lt;");
-                                        sql = sql.replace(/>/g, "&gt;");
-                                        sql = sql.replace(/"/g, "&quot;");
-                                        //替换所有的换行符
-                                        sql = sql.replace(/\r\n/g, "<br>");
-                                        sql = sql.replace(/\n/g, "<br>");
-                                        //替换所有的空格
-                                        sql = sql.replace(/\s/g, "&nbsp;");
-                                        html.push('<span>' + sql + '</span>');
-
-                                    }
-                                });
-                                return html.join('');
-                            }
+            $('#btn-autoreview').button('loading');
+            const instances = getSelectedInstances();
+            if (instances.length === 0) {
+                alert("请选择至少一个实例");
+                $('#btn-autoreview').button('reset');
+                return;
+            }
+            const dbName = $("#db_name").val();
+            const sqlValue = editor.getValue();
+            if (!isBatchMode) {
+                $.ajax({
+                    type: "post",
+                    url: "/api/v1/workflow/sqlcheck/",
+                    dataType: "json",
+                    contentType: 'application/json;',
+                    data: JSON.stringify({
+                        full_sql: sqlValue,
+                        instance_id: instances[0].id,
+                        db_name: dbName
+                    }),
+                    complete: function () {
+                        $('#btn-autoreview').button('reset');
+                    },
+                    success: function (data) {
+                        renderResultTable(data.rows || []);
+                        sessionStorage.setItem('CheckWarningCount', data.warning_count);
+                        sessionStorage.setItem('CheckErrorCount', data.error_count);
+                        $("#inception-result").show();
+                        $('#btn-submitsql').button('reset').removeClass('disabled').prop("disabled", false);
+                    },
+                    error: function (XMLHttpRequest, textStatus, errorThrown) {
+                        if (XMLHttpRequest.responseJSON) {
+                            alert(XMLHttpRequest.responseText);
+                        } else {
+                            alert(errorThrown);
                         }
-                    );
-                    //记录审核结果
-                    sessionStorage.setItem('CheckWarningCount', result.warning_count);
-                    sessionStorage.setItem('CheckErrorCount', result.error_count);
-                    $("#inception-result").show();
-                    $('#btn-submitsql').button('reset').removeClass('disabled').prop("disabled", false);
-                },
-                error: function (XMLHttpRequest, textStatus, errorThrown) {
-                    if (XMLHttpRequest.responseJSON) {
-                        alert(XMLHttpRequest.responseText)
-                    } else {
-                        alert(errorThrown);
                     }
-                }
+                });
+                return;
+            }
+
+            const requests = [];
+            const aggregatedRows = [];
+            let warningCount = 0;
+            let errorCount = 0;
+
+            instances.forEach(function (inst) {
+                const request = $.ajax({
+                    type: "post",
+                    url: "/api/v1/workflow/sqlcheck/",
+                    dataType: "json",
+                    contentType: 'application/json;',
+                    data: JSON.stringify({
+                        full_sql: sqlValue,
+                        instance_id: inst.id,
+                        db_name: dbName
+                    })
+                }).done(function (data) {
+                    warningCount += data.warning_count || 0;
+                    errorCount += data.error_count || 0;
+                    (data.rows || []).forEach(function (row, idx) {
+                        row.instance = inst.name;
+                        row.unique_id = inst.name + '-' + (row.id || idx) + '-' + idx;
+                        aggregatedRows.push(row);
+                    });
+                });
+                requests.push(request);
             });
 
+            $.when.apply($, requests).done(function () {
+                renderResultTable(aggregatedRows);
+                sessionStorage.setItem('CheckWarningCount', warningCount);
+                sessionStorage.setItem('CheckErrorCount', errorCount);
+                $("#inception-result").show();
+                $('#btn-submitsql').button('reset').removeClass('disabled').prop("disabled", false);
+            }).fail(function (jqXHR) {
+                if (jqXHR && jqXHR.responseJSON) {
+                    alert(jqXHR.responseText);
+                } else if (jqXHR && jqXHR.responseText) {
+                    alert(jqXHR.responseText);
+                } else {
+                    alert("自动审核失败，请稍后重试");
+                }
+            }).always(function () {
+                $('#btn-autoreview').button('reset');
+            });
         }
 
         function sqlSubmit() {
             let formData = $('#form-submitsql').serializeArray().reduce(function (obj, item) {
                 obj[item.name] = item.value;
                 return obj;
-            }, {})
-            $.ajax({
-                type: "post",
-                url: "/api/v1/workflow/",
-                dataType: "json",
-                contentType: 'application/json;',
-                data: JSON.stringify({
-                        workflow: {
-                            workflow_name: formData.workflow_name,
-                            demand_url: formData.demand_url,
-                            group_id: $("#group_name option:selected").attr("group-id"),
-                            instance: $("#instance_name option:selected").attr("instance-id"),
-                            db_name: formData.db_name,
-                            is_backup: formData.is_backup === 'True',
-                            run_date_start: formData.run_date_start,
-                            run_date_end: formData.run_date_end,
-                            is_offline_export: 0,
-                        },
-                        sql_content: formData.sql_content
-                    }
-                ),
-                beforeSend: function (xhr) {
-                    $('#btn-submitsql').button('loading')
-                },
-                complete: function () {
-                    $('#btn-submitsql').button('reset')
-                },
-                success: function (data) {
-                    window.location.href = "/detail/"+ data.workflow_id
-                },
-                error: function (XMLHttpRequest, textStatus, errorThrown) {
-                    if (XMLHttpRequest.responseJSON) {
-                        alert(XMLHttpRequest.responseText)
-                    } else {
-                        alert(errorThrown);
-                    }
-                }
-            });
+            }, {});
+            const instances = getSelectedInstances();
+            if (instances.length === 0) {
+                alert("请选择至少一个实例");
+                return;
+            }
+            const baseWorkflow = {
+                workflow_name: formData.workflow_name,
+                demand_url: formData.demand_url,
+                group_id: $("#group_name option:selected").attr("group-id"),
+                db_name: formData.db_name,
+                is_backup: formData.is_backup === 'True',
+                run_date_start: formData.run_date_start,
+                run_date_end: formData.run_date_end,
+                is_offline_export: 0
+            };
+            const basePayload = {
+                workflow: baseWorkflow,
+                sql_content: formData.sql_content
+            };
 
+            if (!isBatchMode) {
+                basePayload.workflow.instance = instances[0].id;
+                $.ajax({
+                    type: "post",
+                    url: "/api/v1/workflow/",
+                    dataType: "json",
+                    contentType: 'application/json;',
+                    data: JSON.stringify(basePayload),
+                    beforeSend: function () {
+                        $('#btn-submitsql').button('loading');
+                    },
+                    complete: function () {
+                        $('#btn-submitsql').button('reset');
+                    },
+                    success: function (data) {
+                        window.location.href = "/detail/" + data.workflow_id;
+                    },
+                    error: function (XMLHttpRequest, textStatus, errorThrown) {
+                        if (XMLHttpRequest.responseJSON) {
+                            alert(XMLHttpRequest.responseText);
+                        } else {
+                            alert(errorThrown);
+                        }
+                    }
+                });
+                return;
+            }
+
+            const successList = [];
+            const workflowIds = [];
+            let index = 0;
+
+            const button = $('#btn-submitsql');
+            button.button('loading').addClass('disabled').prop("disabled", true);
+
+            const submitNext = function () {
+                if (index >= instances.length) {
+                    button.button('reset').removeClass('disabled').prop("disabled", false);
+                    if (workflowIds.length === 1) {
+                        window.location.href = "/detail/" + workflowIds[0];
+                    } else {
+                        alert("批量提交成功：\n" + successList.join('\n'));
+                        window.location.href = "/sqlworkflow/";
+                    }
+                    return;
+                }
+                const currentInstance = instances[index];
+                const payload = JSON.parse(JSON.stringify(basePayload));
+                payload.workflow.instance = currentInstance.id;
+                $.ajax({
+                    type: "post",
+                    url: "/api/v1/workflow/",
+                    dataType: "json",
+                    contentType: 'application/json;',
+                    data: JSON.stringify(payload),
+                    success: function (data) {
+                        workflowIds.push(data.workflow_id);
+                        successList.push(currentInstance.name + " -> 工单#" + data.workflow_id);
+                        index += 1;
+                        submitNext();
+                    },
+                    error: function (XMLHttpRequest, textStatus, errorThrown) {
+                        button.button('reset').removeClass('disabled').prop("disabled", false);
+                        if (XMLHttpRequest.responseJSON) {
+                            alert("提交实例 " + currentInstance.name + " 失败: " + XMLHttpRequest.responseText);
+                        } else {
+                            alert("提交实例 " + currentInstance.name + " 失败: " + errorThrown);
+                        }
+                    }
+                });
+            };
+
+            submitNext();
         }
     </script>
     <!--group -->
@@ -662,7 +806,13 @@
                             }
                         }
                         $('#instance_name').selectpicker('render').selectpicker('refresh');
-                        $("#db_name").empty().selectpicker('render').selectpicker('refresh');
+                        {% if batch_mode %}
+                        $("#db_name").val("");
+                        {% else %}
+                        $("#db_name").empty();
+                        $("#db_name").append('<option value="is-empty" disabled selected>请选择数据库：</option>');
+                        $("#db_name").selectpicker('render').selectpicker('refresh');
+                        {% endif %}
                     } else {
                         alert(data.msg);
                     }

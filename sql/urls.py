@@ -38,6 +38,7 @@ urlpatterns = [
     path("signup/", auth.sign_up),
     path("sqlworkflow/", views.sqlworkflow),
     path("submitsql/", views.submit_sql),
+    path("submitbatchsql/", views.submit_sql_batch),
     path("editsql/", views.submit_sql),
     path("submitotherinstance/", views.submit_sql),
     path("detail/<int:workflow_id>/", views.detail, name="detail"),
